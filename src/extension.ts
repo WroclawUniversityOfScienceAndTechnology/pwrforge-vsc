@@ -246,7 +246,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(statusBar);
 
   const provider = new PwrforgeViewProvider(context);
-  vscode.window.registerTreeDataProvider("pwrforge.view", provider);
+  vscode.window.registerTreeDataProvider("pwrforge_view", provider);
 
   async function updateStatusBar() {
     const root = workspaceRoot();

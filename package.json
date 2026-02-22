@@ -3,6 +3,7 @@
   "displayName": "pwrforge-vsc",
   "description": "pwrforge vscode plugin",
   "version": "0.0.1",
+  "icon": "resources/pwrforge.png",
   "publisher": "WroclawUniversityOfScienceAndTechnology",
   "license": "MIT",
   "engines": {
@@ -29,17 +30,18 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "pwrforge.container",
+          "id": "pwrforge_container",
           "title": "Pwrforge",
           "icon": "resources/pwrforge.svg"
         }
       ]
     },
     "views": {
-      "pwrforge.container": [
+      "pwrforge_container": [
         {
-          "id": "pwrforge.view",
-          "name": "Actions"
+          "id": "pwrforge_view",
+          "name": "Actions",
+          "icon": "resources/pwrforge.svg"
         }
       ]
     },
@@ -143,33 +145,37 @@
       {
         "command": "pwrforge.refresh",
         "title": "Pwrforge: Refresh View"
+      },
+      {
+        "command": "pwrforge.dockerDoctor",
+        "title": "Pwrforge: Docker doctor"
       }
     ],
     "menus": {
       "view/title": [
         {
           "command": "pwrforge.build",
-          "when": "view == pwrforge.view",
+          "when": "view == pwrforge_view",
           "group": "navigation"
         },
         {
           "command": "pwrforge.test",
-          "when": "view == pwrforge.view",
+          "when": "view == pwrforge_view",
           "group": "navigation"
         },
         {
           "command": "pwrforge.check",
-          "when": "view == pwrforge.view",
+          "when": "view == pwrforge_view",
           "group": "navigation"
         },
         {
           "command": "pwrforge.fix",
-          "when": "view == pwrforge.view",
+          "when": "view == pwrforge_view",
           "group": "navigation"
         },
         {
           "command": "pwrforge.more",
-          "when": "view == pwrforge.view",
+          "when": "view == pwrforge_view",
           "group": "navigation"
         }
       ],
