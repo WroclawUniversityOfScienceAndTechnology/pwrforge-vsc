@@ -346,6 +346,12 @@ class ActionItem extends vscode.TreeItem {
   }
 }
 
+class SectionItem extends vscode.TreeItem {
+  constructor(public readonly section: "environment" | "actions", label: string) {
+    super(label, vscode.TreeItemCollapsibleState.Expanded);
+  }
+}
+
 class PwrforgeViewProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   private _onDidChangeTreeData = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
@@ -358,7 +364,7 @@ class PwrforgeViewProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     this._onDidChangeTreeData.fire();
   }
 
-  async getChildren(): Promise<vscode.TreeItem[]> {
+  async getChildren(element?: vscode.TreeItem): Promise<vscode.TreeItem[]> {
     const root = workspaceRoot();
     if (!root) {
       return [new ActionItem("Open a workspace folder", "No folder opened")];
@@ -366,45 +372,41 @@ class PwrforgeViewProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
 
     this.status = await computeStatus(root);
 
-    const env = new vscode.TreeItem("Environment", vscode.TreeItemCollapsibleState.Expanded);
+    if (!element) {
+      return [new SectionItem("environment", "Environment"), new SectionItem("actions", "Actions")];
+    }
 
-    const items: vscode.TreeItem[] = [];
+    if (element instanceof SectionItem && element.section === "environment") {
+      return [
+        new ActionItem(
+          this.status.venvOk ? "✅ .venv" : "⚠️ .venv missing",
+          this.status.venvOk ? "Python venv ready" : "Run: Pwrforge: Setup",
+          this.status.venvOk ? undefined : "pwrforge.setup"
+        ),
+        new ActionItem(
+          this.status.python312Ok ? "✅ python3.12" : "⚠️ python3.12 missing",
+          this.status.python312Ok ? "Available in PATH" : "Install Python 3.12",
+          undefined
+        ),
+        new ActionItem(
+          this.status.dockerOk ? "✅ docker" : "⚠️ docker issue",
+          this.status.dockerOk ? "Docker OK" : (this.status.dockerHint ?? "Check docker"),
+          "pwrforge.dockerDoctor"
+        )
+      ];
+    }
 
-    items.push(env);
+    if (element instanceof SectionItem && element.section === "actions") {
+      return [
+        new ActionItem("Build", "pwrforge build", "pwrforge.build"),
+        new ActionItem("Test", "pwrforge test", "pwrforge.test"),
+        new ActionItem("Check", "pwrforge check", "pwrforge.check"),
+        new ActionItem("Fix", "pwrforge fix", "pwrforge.fix"),
+        new ActionItem("More…", "choose other commands", "pwrforge.more")
+      ];
+    }
 
-    items.push(
-      new ActionItem(
-        this.status.venvOk ? "✅ .venv" : "⚠️ .venv missing",
-        this.status.venvOk ? "Python venv ready" : "Run: Pwrforge: Setup",
-        this.status.venvOk ? undefined : "pwrforge.setup"
-      )
-    );
-
-    items.push(
-      new ActionItem(
-        this.status.python312Ok ? "✅ python3.12" : "⚠️ python3.12 missing",
-        this.status.python312Ok ? "Available in PATH" : "Install Python 3.12",
-        undefined
-      )
-    );
-
-    items.push(
-      new ActionItem(
-        this.status.dockerOk ? "✅ docker" : "⚠️ docker issue",
-        this.status.dockerOk ? "Docker OK" : (this.status.dockerHint ?? "Check docker"),
-        "pwrforge.dockerDoctor"
-      )
-    );
-
-    items.push(new vscode.TreeItem("Actions", vscode.TreeItemCollapsibleState.Expanded));
-
-    items.push(new ActionItem("Build", "pwrforge build", "pwrforge.build"));
-    items.push(new ActionItem("Test", "pwrforge test", "pwrforge.test"));
-    items.push(new ActionItem("Check", "pwrforge check", "pwrforge.check"));
-    items.push(new ActionItem("Fix", "pwrforge fix", "pwrforge.fix"));
-    items.push(new ActionItem("More…", "choose other commands", "pwrforge.more"));
-
-    return items;
+    return [];
   }
 
   getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
