@@ -135,20 +135,43 @@ async function selectActiveProjectRoot(root: string): Promise<string | undefined
 async function resolveProjectContext(
   context: vscode.ExtensionContext,
   forcePick = false,
-  allowPrompt = true
+  allowPrompt = true,
+  allowWorkspaceFallback = false
 ): Promise<ProjectContext | undefined> {
   const root = workspaceRoot();
   if (!root) {
     return undefined;
   }
 
+  if (allowWorkspaceFallback && !forcePick && listProjectFolders(root).length === 0) {
+    return {
+      workspaceRoot: root,
+      projectRoot: root,
+      sharedEnvRoot: root
+    };
+  }
+
   let selected = context.workspaceState.get<string>(PROJECT_PICK_STORAGE_KEY);
   if (!selected || !selected.startsWith(root) || !exists(selected) || forcePick) {
     if (!allowPrompt) {
+      if (allowWorkspaceFallback) {
+        return {
+          workspaceRoot: root,
+          projectRoot: root,
+          sharedEnvRoot: root
+        };
+      }
       return undefined;
     }
     selected = await selectActiveProjectRoot(root);
     if (!selected) {
+      if (allowWorkspaceFallback) {
+        return {
+          workspaceRoot: root,
+          projectRoot: root,
+          sharedEnvRoot: root
+        };
+      }
       return undefined;
     }
     await context.workspaceState.update(PROJECT_PICK_STORAGE_KEY, selected);
@@ -157,7 +180,7 @@ async function resolveProjectContext(
   return {
     workspaceRoot: root,
     projectRoot: selected,
-    sharedEnvRoot: path.dirname(selected)
+    sharedEnvRoot: selected === root ? root : path.dirname(selected)
   };
 }
 
@@ -381,7 +404,7 @@ async function runPwrforgeNew(ctx: ProjectContext) {
   if (target.value) {
     args.push("--target", target.value);
   }
-  args.push("--base-dir", path.dirname(ctx.projectRoot));
+  args.push("--base-dir", ctx.sharedEnvRoot);
   args.push(projectName.trim());
 
   runInTerminal(pwrforgeCmd(ctx.sharedEnvRoot, "new", args), ctx.projectRoot);
@@ -664,7 +687,7 @@ async function computeStatus(ctx: ProjectContext | undefined): Promise<Status> {
       venvOk: false,
       python312Ok: false,
       dockerOk: false,
-      dockerHint: "Select an active project first."
+      dockerHint: "Select an active project, or run Setup/New to bootstrap a workspace."
     };
   }
 
@@ -731,7 +754,12 @@ class PwrforgeViewProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
 
     if (element instanceof SectionItem && element.section === "environment") {
       if (!ctx || !this.status.activeProjectName) {
-        return [new ActionItem("⚠️ active project not selected", "Run: Pwrforge: Select Active Project", "pwrforge.selectProject")];
+        return [
+          new ActionItem("⚠️ active project not selected", "Run Setup/New, or select a project subfolder"),
+          new ActionItem("Setup", "Initialize shared .venv in workspace root", "pwrforge.setup"),
+          new ActionItem("New…", "Create first project template", "pwrforge.new"),
+          new ActionItem("Select active project", "Run: Pwrforge: Select Active Project", "pwrforge.selectProject")
+        ];
       }
       return [
         new ActionItem(`📁 project: ${this.status.activeProjectName}`, `Shared venv: ${ctx.sharedEnvRoot}/.venv`, "pwrforge.selectProject"),
@@ -755,7 +783,11 @@ class PwrforgeViewProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
 
     if (element instanceof SectionItem && element.section === "actions") {
       if (!ctx) {
-        return [new ActionItem("Select active project", "Choose project subfolder first", "pwrforge.selectProject")];
+        return [
+          new ActionItem("Setup", "Initialize shared environment", "pwrforge.setup"),
+          new ActionItem("New…", "Create a new project", "pwrforge.new"),
+          new ActionItem("Select active project", "Choose project subfolder first", "pwrforge.selectProject")
+        ];
       }
       return [
         new ActionItem("Build", "pwrforge build", "pwrforge.build"),
@@ -793,8 +825,8 @@ export function activate(context: vscode.ExtensionContext) {
   const provider = new PwrforgeViewProvider(context);
   vscode.window.registerTreeDataProvider("pwrforge_view", provider);
 
-  async function getCtx(forcePick = false): Promise<ProjectContext | undefined> {
-    return resolveProjectContext(context, forcePick, true);
+  async function getCtx(forcePick = false, allowWorkspaceFallback = false): Promise<ProjectContext | undefined> {
+    return resolveProjectContext(context, forcePick, true, allowWorkspaceFallback);
   }
 
   async function updateStatusBar() {
@@ -835,7 +867,7 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand("pwrforge.setup", async () => {
-      const ctx = await getCtx();
+      const ctx = await getCtx(false, true);
       if (!ctx) {
         return;
       }
@@ -975,7 +1007,7 @@ export function activate(context: vscode.ExtensionContext) {
       }
     }),
     vscode.commands.registerCommand("pwrforge.new", async () => {
-      const ctx = await getCtx();
+      const ctx = await getCtx(false, true);
       if (ctx) {
         await runPwrforgeNew(ctx);
       }
@@ -991,6 +1023,7 @@ export function activate(context: vscode.ExtensionContext) {
       const pick = await vscode.window.showQuickPick(
         [
           { label: "build", description: "Compile sources" },
+          { label: "setup", description: "Initialize shared environment" },
           { label: "test", description: "Compile and run tests" },
           { label: "check", description: "Check source code" },
           { label: "fix", description: "Fix violations" },
@@ -1013,11 +1046,14 @@ export function activate(context: vscode.ExtensionContext) {
       if (!pick) {
         return;
       }
-      const ctx = await getCtx();
+      const ctx = await getCtx(false, pick.label === "setup" || pick.label === "new");
       if (!ctx) {
         return;
       }
-      if (pick.label === "new") {
+      if (pick.label === "setup") {
+        await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot, ctx.workspaceRoot);
+        await ensureDocker(ctx.projectRoot);
+      } else if (pick.label === "new") {
         await runPwrforgeNew(ctx);
       } else if (pick.label === "monitor") {
         await runPwrforgeMonitor(ctx);
