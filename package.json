@@ -32,7 +32,7 @@
         {
           "id": "pwrforge_container",
           "title": "Pwrforge",
-          "icon": "resources/pwrforge.svg"
+          "icon": "resources/pwrforge.png"
         }
       ]
     },
@@ -41,7 +41,7 @@
         {
           "id": "pwrforge_view",
           "name": "Actions",
-          "icon": "resources/pwrforge.svg"
+          "icon": "resources/pwrforge.png"
         }
       ]
     },
@@ -60,32 +60,32 @@
         "command": "pwrforge.build",
         "title": "Pwrforge: Build",
         "icon": {
-          "light": "resources/pwrforge.svg",
-          "dark": "resources/pwrforge.svg"
+          "light": "resources/pwrforge.png",
+          "dark": "resources/pwrforge.png"
         }
       },
       {
         "command": "pwrforge.test",
         "title": "Pwrforge: Test",
         "icon": {
-          "light": "resources/pwrforge.svg",
-          "dark": "resources/pwrforge.svg"
+          "light": "resources/pwrforge.png",
+          "dark": "resources/pwrforge.png"
         }
       },
       {
         "command": "pwrforge.check",
         "title": "Pwrforge: Check",
         "icon": {
-          "light": "resources/pwrforge.svg",
-          "dark": "resources/pwrforge.svg"
+          "light": "resources/pwrforge.png",
+          "dark": "resources/pwrforge.png"
         }
       },
       {
         "command": "pwrforge.fix",
         "title": "Pwrforge: Fix",
         "icon": {
-          "light": "resources/pwrforge.svg",
-          "dark": "resources/pwrforge.svg"
+          "light": "resources/pwrforge.png",
+          "dark": "resources/pwrforge.png"
         }
       },
       {
@@ -144,8 +144,8 @@
         "command": "pwrforge.more",
         "title": "Pwrforge: More…",
         "icon": {
-          "light": "resources/pwrforge.svg",
-          "dark": "resources/pwrforge.svg"
+          "light": "resources/pwrforge.png",
+          "dark": "resources/pwrforge.png"
         }
       },
       {
