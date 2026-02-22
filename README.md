@@ -1,71 +1,132 @@
-# pwrforge-vsc README
+# Pwrforge VS Code Extension
 
-This is the README for your extension "pwrforge-vsc". After writing up a brief description, we recommend including the following sections.
+VS Code integration for `pwrforge` workflows (setup, build/test/check/fix, project generation, docker/flash/monitor helpers) with a shared Python virtual environment.
 
-## Features
+## What This Extension Does
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+- Adds a dedicated **Pwrforge** activity-bar view with:
+  - `Environment` section
+  - `Actions` section
+- Adds Pwrforge commands to the Command Palette.
+- Runs all commands using a shared `.venv` one level above the selected project folder.
+- Keeps one reusable terminal (`Pwrforge`) for command execution.
 
-For example if there is an image subfolder under your extension project workspace:
+## Project Model
 
-\!\[feature X\]\(images/feature-x.png\)
+This extension is designed for a workspace where the workspace root contains multiple project subfolders.
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+Example:
+
+```text
+workspace-root/
+  .venv/                <- shared environment created here
+  project-a/            <- selected active project
+  project-b/
+```
+
+Behavior:
+
+- Active project is selected via `Pwrforge: Select Active Project`.
+- Command execution directory is the selected project folder.
+- Shared Python environment is created/used at `dirname(projectRoot)/.venv`.
 
 ## Requirements
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+- VS Code `>= 1.109.0`
+- `python3.12` available in PATH
+- Docker installed for docker-related workflows
+- Workspace opened at a folder that contains project subfolders
 
-## Extension Settings
+## Quick Start
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+1. Open your workspace root.
+2. Run `Pwrforge: Select Active Project`.
+3. Run `Pwrforge: Setup Environment`.
+4. Use `Pwrforge: Build` / `Test` / `Check` / `Fix` or the tree view actions.
 
-For example:
+## Command Reference
 
-This extension contributes the following settings:
+### Core commands
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+- `Pwrforge: Select Active Project`
+  - Choose which project subfolder is active.
+- `Pwrforge: Setup Environment`
+  - Ensures shared `.venv` exists.
+  - Installs `pwrforge` into shared `.venv` if missing.
+  - Checks Docker and can trigger install command guidance.
+- `Pwrforge: Refresh View`
+  - Refreshes the tree view and status bar.
+- `Pwrforge: Docker doctor`
+  - Runs Docker availability diagnostics.
 
-## Known Issues
+### Build and quality commands
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+- `Pwrforge: Build`
+- `Pwrforge: Test`
+- `Pwrforge: Check`
+- `Pwrforge: Fix`
+- `Pwrforge: Clean`
+- `Pwrforge: Run`
+- `Pwrforge: Debug`
+- `Pwrforge: Doc`
+- `Pwrforge: Update`
+- `Pwrforge: Publish`
+- `Pwrforge: License Check`
+- `Pwrforge: Version`
 
-## Release Notes
+Note: Commands that require initialized project state verify `pwrforge.lock`. If missing, extension offers `pwrforge update`.
 
-Users appreciate release notes as you update your extension.
+### Interactive commands
 
-### 1.0.0
+- `Pwrforge: New…`
+  - Prompts for `PROJECT_NAME`
+  - Prompts Docker mode and optional target
+  - Passes `--base-dir` for the active project parent
+- `Pwrforge: Monitor`
+  - Prompts required serial `--port`
+  - Optional `--baudrate`
+  - Passes `--base-dir`
+- `Pwrforge: Gen`
+  - Guided mode selection for options like:
+    - `--profile`
+    - `--unit-test`
+    - `--mock`
+    - cert generation (`--certs`, optional `--type`, `--in`, `--passwd`)
+    - `--fs`
+    - `--bin`
+  - Passes `--base-dir`
+- `Pwrforge: Docker…`
+  - Prompts subcommand:
+    - `build`
+    - `exec`
+    - `run`
+- `Pwrforge: Flash`
+  - Prompts for profile/target/port and optional flags:
+    - `--app` / `--fs`
+    - `--no-erase`
+    - `--bank`
+  - Passes `--base-dir`
+- `Pwrforge: More…`
+  - Quick picker for common commands.
 
-Initial release of ...
+## UI Integration
 
-### 1.0.1
+- Activity bar container: `Pwrforge`
+- View: `Actions`
+- View title shortcuts: Build, Test, Check, Fix, More
+- Explorer context menu: Build, Test, Check, Fix
 
-Fixed issue #.
+## Notes
 
-### 1.1.0
+- The extension runs commands via the shared `.venv` executable path directly, not global `pwrforge` from shell.
+- The extension terminal on Linux uses `bash --noprofile --norc` to avoid noise from user shell startup files.
 
-Added features X, Y, and Z.
+## Development
 
----
+Useful scripts:
 
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+- `npm run compile`
+- `npm run watch`
+- `npm run lint`
+- `npm run check-types`
+- `npm test`
