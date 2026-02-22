@@ -560,6 +560,103 @@ async function runPwrforgeDocker(ctx: ProjectContext) {
   runInTerminal(pwrforgeCmd(ctx.sharedEnvRoot, "docker", [subcommand.label]), ctx.projectRoot);
 }
 
+async function runPwrforgeFlash(ctx: ProjectContext) {
+  await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot, ctx.workspaceRoot);
+  if (!(await ensureProjectInitialized(ctx, "flash"))) {
+    return;
+  }
+
+  const args: string[] = ["--base-dir", ctx.projectRoot];
+
+  const profile = await vscode.window.showInputBox({
+    title: "Pwrforge: Flash",
+    prompt: "Profile (default: Debug)",
+    value: "Debug"
+  });
+  if (profile === undefined) {
+    return;
+  }
+  if (profile.trim()) {
+    args.push("--profile", profile.trim());
+  }
+
+  const target = await vscode.window.showQuickPick(
+    [
+      { label: "Default target from toml", value: "" },
+      { label: "atsam", value: "atsam" },
+      { label: "esp32", value: "esp32" },
+      { label: "stm32", value: "stm32" },
+      { label: "x86", value: "x86" }
+    ],
+    { title: "Pwrforge: Flash", placeHolder: "Target (optional)" }
+  );
+  if (!target) {
+    return;
+  }
+  if (target.value) {
+    args.push("--target", target.value);
+  }
+
+  const port = await vscode.window.showInputBox({
+    title: "Pwrforge: Flash",
+    prompt: "Port (optional, mostly esp32), e.g. /dev/ttyUSB0"
+  });
+  if (port === undefined) {
+    return;
+  }
+  if (port.trim()) {
+    args.push("--port", port.trim());
+  }
+
+  const flashMode = await vscode.window.showQuickPick(
+    [
+      { label: "Default mode", value: "" },
+      { label: "App only (--app)", value: "--app" },
+      { label: "Filesystem only (--fs)", value: "--fs" }
+    ],
+    { title: "Pwrforge: Flash", placeHolder: "Flash mode" }
+  );
+  if (!flashMode) {
+    return;
+  }
+  if (flashMode.value) {
+    args.push(flashMode.value);
+  }
+
+  const noErase = await vscode.window.showQuickPick(
+    [
+      { label: "Erase enabled (default)", value: false },
+      { label: "No erase (--no-erase)", value: true }
+    ],
+    { title: "Pwrforge: Flash", placeHolder: "Erase behavior (stm32)" }
+  );
+  if (!noErase) {
+    return;
+  }
+  if (noErase.value) {
+    args.push("--no-erase");
+  }
+
+  const bank = await vscode.window.showInputBox({
+    title: "Pwrforge: Flash",
+    prompt: "Bank number (optional, esp32), e.g. 0",
+    validateInput: (value) => {
+      if (!value.trim()) {
+        return undefined;
+      }
+      return /^\d+$/.test(value.trim()) ? undefined : "Bank must be an integer.";
+    }
+  });
+  if (bank === undefined) {
+    return;
+  }
+  if (bank.trim()) {
+    args.push("--bank", bank.trim());
+  }
+
+  runInTerminal(pwrforgeCmd(ctx.sharedEnvRoot, "flash", args), ctx.projectRoot);
+}
+
 async function computeStatus(ctx: ProjectContext | undefined): Promise<Status> {
   if (!ctx) {
     return {
@@ -838,7 +935,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("pwrforge.flash", async () => {
       const ctx = await getCtx();
       if (ctx) {
-        await runPwrforge(ctx, "flash");
+        await runPwrforgeFlash(ctx);
       }
     }),
     vscode.commands.registerCommand("pwrforge.monitor", async () => {
@@ -928,6 +1025,8 @@ export function activate(context: vscode.ExtensionContext) {
         await runPwrforgeGen(ctx);
       } else if (pick.label === "docker") {
         await runPwrforgeDocker(ctx);
+      } else if (pick.label === "flash") {
+        await runPwrforgeFlash(ctx);
       } else {
         await runPwrforge(ctx, pick.label);
       }
