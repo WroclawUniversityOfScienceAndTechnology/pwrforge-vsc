@@ -47,6 +47,11 @@
     },
     "commands": [
       {
+        "command": "pwrforge.selectProject",
+        "title": "Select Active Project",
+        "category": "Pwrforge"
+      },
+      {
         "command": "pwrforge.setup",
         "title": "Setup Environment",
         "category": "Pwrforge"
@@ -203,6 +208,9 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "pwrforge.selectProject"
+        },
         {
           "command": "pwrforge.setup"
         },

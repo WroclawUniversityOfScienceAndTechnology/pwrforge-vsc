@@ -4,14 +4,35 @@ import * as fs from "fs";
 import * as path from "path";
 
 type Status = {
+  activeProjectName?: string;
   venvOk: boolean;
   python312Ok: boolean;
   dockerOk: boolean;
   dockerHint?: string;
 };
 
+type ProjectContext = {
+  workspaceRoot: string;
+  projectRoot: string;
+  sharedEnvRoot: string;
+};
+
 function workspaceRoot(): string | undefined {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+}
+
+const PROJECT_PICK_STORAGE_KEY = "pwrforge.activeProjectRoot";
+
+function projectName(projectRoot: string): string {
+  return path.basename(projectRoot);
+}
+
+function listProjectFolders(root: string): string[] {
+  const ignored = new Set([".git", ".vscode", ".venv", "node_modules", "dist", "out"]);
+  return fs
+    .readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !ignored.has(entry.name))
+    .map((entry) => path.join(root, entry.name));
 }
 
 function venvPython(root: string): string {
@@ -44,6 +65,7 @@ async function execCheck(cmd: string, cwd: string): Promise<{ ok: boolean; outpu
 }
 
 let pwrforgeTerminal: vscode.Terminal | undefined;
+let pwrforgeTerminalCwd: string | undefined;
 
 function terminalOptions(cwd: string): vscode.TerminalOptions {
   if (process.platform === "win32") {
@@ -61,8 +83,14 @@ function terminalOptions(cwd: string): vscode.TerminalOptions {
 }
 
 function getPwrforgeTerminal(cwd: string): vscode.Terminal {
+  if (pwrforgeTerminal && pwrforgeTerminalCwd !== cwd) {
+    pwrforgeTerminal.dispose();
+    pwrforgeTerminal = undefined;
+    pwrforgeTerminalCwd = undefined;
+  }
   if (!pwrforgeTerminal) {
     pwrforgeTerminal = vscode.window.createTerminal(terminalOptions(cwd));
+    pwrforgeTerminalCwd = cwd;
   }
   return pwrforgeTerminal;
 }
@@ -85,32 +113,83 @@ function isPwrforgeRepo(root: string): boolean {
   return exists(path.join(root, "pyproject.toml")) && exists(path.join(root, "pwrforge"));
 }
 
-async function ensureVenv(root: string) {
-  const py = venvPython(root);
-  const cli = venvPwrforge(root);
+async function selectActiveProjectRoot(root: string): Promise<string | undefined> {
+  const projects = listProjectFolders(root);
+  if (projects.length === 0) {
+    vscode.window.showWarningMessage("Pwrforge: no project subfolders found in workspace root.");
+    return undefined;
+  }
+
+  const pick = await vscode.window.showQuickPick(
+    projects.map((project) => ({
+      label: projectName(project),
+      description: project,
+      project
+    })),
+    { placeHolder: "Select active Pwrforge project" }
+  );
+
+  return pick?.project;
+}
+
+async function resolveProjectContext(
+  context: vscode.ExtensionContext,
+  forcePick = false,
+  allowPrompt = true
+): Promise<ProjectContext | undefined> {
+  const root = workspaceRoot();
+  if (!root) {
+    return undefined;
+  }
+
+  let selected = context.workspaceState.get<string>(PROJECT_PICK_STORAGE_KEY);
+  if (!selected || !selected.startsWith(root) || !exists(selected) || forcePick) {
+    if (!allowPrompt) {
+      return undefined;
+    }
+    selected = await selectActiveProjectRoot(root);
+    if (!selected) {
+      return undefined;
+    }
+    await context.workspaceState.update(PROJECT_PICK_STORAGE_KEY, selected);
+  }
+
+  return {
+    workspaceRoot: root,
+    projectRoot: selected,
+    sharedEnvRoot: path.dirname(selected)
+  };
+}
+
+async function ensureVenv(sharedEnvRoot: string, projectRoot: string, workspaceRootForEditableInstall?: string) {
+  const py = venvPython(sharedEnvRoot);
+  const cli = venvPwrforge(sharedEnvRoot);
 
   if (!exists(py)) {
-    const py312 = await execCheck("python3.12 --version", root);
+    const py312 = await execCheck("python3.12 --version", projectRoot);
     if (!py312.ok) {
       vscode.window.showErrorMessage("Pwrforge: nie widzę python3.12 w PATH. Zainstaluj Python 3.12 (z venv).");
       throw new Error("python3.12 missing");
     }
 
-    const venv = await execCheck("python3.12 -m venv .venv", root);
+    const venv = await execCheck("python3.12 -m venv .venv", sharedEnvRoot);
     if (!venv.ok) {
       vscode.window.showErrorMessage("Pwrforge: nie udało się utworzyć .venv:\n" + venv.output);
       throw new Error("venv create failed");
     }
 
-    await execCheck(`${quoteArg(py)} -m pip install --upgrade pip`, root);
+    await execCheck(`${quoteArg(py)} -m pip install --upgrade pip`, sharedEnvRoot);
   }
 
   if (!exists(cli)) {
     // Jeśli użytkownik jest w repo pwrforge -> install editable, w innym wypadku PyPI
-    const installCmd = isPwrforgeRepo(root)
+    const installCmd = workspaceRootForEditableInstall && isPwrforgeRepo(workspaceRootForEditableInstall)
       ? `${quoteArg(py)} -m pip install -e .`
       : `${quoteArg(py)} -m pip install pwrforge`;
-    const install = await execCheck(installCmd, root);
+    const installCwd = workspaceRootForEditableInstall && isPwrforgeRepo(workspaceRootForEditableInstall)
+      ? workspaceRootForEditableInstall
+      : sharedEnvRoot;
+    const install = await execCheck(installCmd, installCwd);
     if (!install.ok) {
       vscode.window.showErrorMessage("Pwrforge: nie udało się zainstalować pwrforge do .venv:\n" + install.output);
       throw new Error("pwrforge install failed");
@@ -118,7 +197,7 @@ async function ensureVenv(root: string) {
   }
 
   // ustaw interpreter VS Code (fallback)
-  const vscodeDir = path.join(root, ".vscode");
+  const vscodeDir = path.join(projectRoot, ".vscode");
   const settingsPath = path.join(vscodeDir, "settings.json");
   fs.mkdirSync(vscodeDir, { recursive: true });
 
@@ -212,8 +291,8 @@ async function ensureDocker(root: string): Promise<boolean> {
   return false;
 }
 
-function pwrforgeCmd(root: string, subcmd: string, args: string[] = []): string {
-  const cli = venvPwrforge(root);
+function pwrforgeCmd(sharedEnvRoot: string, subcmd: string, args: string[] = []): string {
+  const cli = venvPwrforge(sharedEnvRoot);
   const parts = [subcmd, ...args].map(quoteArg).join(" ");
   return `${quoteArg(cli)} ${parts}`;
 }
@@ -222,11 +301,11 @@ function needsLockFile(subcmd: string): boolean {
   return !["new", "version", "docker", "update"].includes(subcmd);
 }
 
-async function ensureProjectInitialized(root: string, subcmd: string): Promise<boolean> {
+async function ensureProjectInitialized(ctx: ProjectContext, subcmd: string): Promise<boolean> {
   if (!needsLockFile(subcmd)) {
     return true;
   }
-  const lockPath = path.join(root, "pwrforge.lock");
+  const lockPath = path.join(ctx.projectRoot, "pwrforge.lock");
   if (exists(lockPath)) {
     return true;
   }
@@ -240,37 +319,28 @@ async function ensureProjectInitialized(root: string, subcmd: string): Promise<b
     return false;
   }
 
-  runInTerminal(pwrforgeCmd(root, "update"), root);
+  runInTerminal(pwrforgeCmd(ctx.sharedEnvRoot, "update"), ctx.projectRoot);
   return false;
 }
 
-async function runPwrforge(subcmd: string, args: string[] = []): Promise<boolean> {
-  const root = workspaceRoot();
-  if (!root) {
-    return false;
-  }
-
-  await ensureVenv(root);
-  if (!(await ensureProjectInitialized(root, subcmd))) {
+async function runPwrforge(ctx: ProjectContext, subcmd: string, args: string[] = []): Promise<boolean> {
+  await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot, ctx.workspaceRoot);
+  if (!(await ensureProjectInitialized(ctx, subcmd))) {
     return false;
   }
 
   // Nie blokuj zawsze — ale pokaż ostrzeżenie. Część komend może działać bez dockera, część nie.
-  const d = await dockerDoctor(root);
+  const d = await dockerDoctor(ctx.projectRoot);
   if (!d.ok && d.hint) {
     vscode.window.showWarningMessage("Pwrforge: " + d.hint);
   }
 
-  runInTerminal(pwrforgeCmd(root, subcmd, args), root);
+  runInTerminal(pwrforgeCmd(ctx.sharedEnvRoot, subcmd, args), ctx.projectRoot);
   return true;
 }
 
-async function runPwrforgeNew() {
-  const root = workspaceRoot();
-  if (!root) {
-    return;
-  }
-  await ensureVenv(root);
+async function runPwrforgeNew(ctx: ProjectContext) {
+  await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot, ctx.workspaceRoot);
 
   const projectName = await vscode.window.showInputBox({
     title: "Pwrforge: New Project",
@@ -311,20 +381,32 @@ async function runPwrforgeNew() {
   if (target.value) {
     args.push("--target", target.value);
   }
+  args.push("--base-dir", path.dirname(ctx.projectRoot));
   args.push(projectName.trim());
 
-  runInTerminal(pwrforgeCmd(root, "new", args), root);
+  runInTerminal(pwrforgeCmd(ctx.sharedEnvRoot, "new", args), ctx.projectRoot);
 }
 
-async function computeStatus(root: string): Promise<Status> {
-  const py = venvPython(root);
+async function computeStatus(ctx: ProjectContext | undefined): Promise<Status> {
+  if (!ctx) {
+    return {
+      activeProjectName: undefined,
+      venvOk: false,
+      python312Ok: false,
+      dockerOk: false,
+      dockerHint: "Select an active project first."
+    };
+  }
+
+  const py = venvPython(ctx.sharedEnvRoot);
   const venvOk = exists(py);
 
-  const py312 = await execCheck("python3.12 --version", root);
+  const py312 = await execCheck("python3.12 --version", ctx.projectRoot);
   const python312Ok = py312.ok;
 
-  const d = await dockerDoctor(root);
+  const d = await dockerDoctor(ctx.projectRoot);
   return {
+    activeProjectName: projectName(ctx.projectRoot),
     venvOk,
     python312Ok,
     dockerOk: d.ok,
@@ -370,17 +452,22 @@ class PwrforgeViewProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
       return [new ActionItem("Open a workspace folder", "No folder opened")];
     }
 
-    this.status = await computeStatus(root);
+    const ctx = await resolveProjectContext(this.context, false, false);
+    this.status = await computeStatus(ctx);
 
     if (!element) {
       return [new SectionItem("environment", "Environment"), new SectionItem("actions", "Actions")];
     }
 
     if (element instanceof SectionItem && element.section === "environment") {
+      if (!ctx || !this.status.activeProjectName) {
+        return [new ActionItem("⚠️ active project not selected", "Run: Pwrforge: Select Active Project", "pwrforge.selectProject")];
+      }
       return [
+        new ActionItem(`📁 project: ${this.status.activeProjectName}`, `Shared venv: ${ctx.sharedEnvRoot}/.venv`, "pwrforge.selectProject"),
         new ActionItem(
           this.status.venvOk ? "✅ .venv" : "⚠️ .venv missing",
-          this.status.venvOk ? "Python venv ready" : "Run: Pwrforge: Setup",
+          this.status.venvOk ? `Shared env ready in ${ctx.sharedEnvRoot}/.venv` : "Run: Pwrforge: Setup",
           this.status.venvOk ? undefined : "pwrforge.setup"
         ),
         new ActionItem(
@@ -397,6 +484,9 @@ class PwrforgeViewProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     }
 
     if (element instanceof SectionItem && element.section === "actions") {
+      if (!ctx) {
+        return [new ActionItem("Select active project", "Choose project subfolder first", "pwrforge.selectProject")];
+      }
       return [
         new ActionItem("Build", "pwrforge build", "pwrforge.build"),
         new ActionItem("Test", "pwrforge test", "pwrforge.test"),
@@ -419,6 +509,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.onDidCloseTerminal((terminal) => {
       if (terminal === pwrforgeTerminal) {
         pwrforgeTerminal = undefined;
+        pwrforgeTerminalCwd = undefined;
       }
     })
   );
@@ -432,18 +523,28 @@ export function activate(context: vscode.ExtensionContext) {
   const provider = new PwrforgeViewProvider(context);
   vscode.window.registerTreeDataProvider("pwrforge_view", provider);
 
+  async function getCtx(forcePick = false): Promise<ProjectContext | undefined> {
+    return resolveProjectContext(context, forcePick, true);
+  }
+
   async function updateStatusBar() {
     const root = workspaceRoot();
     if (!root) {
       statusBar.text = "Pwrforge: no workspace";
       return;
     }
-    const s = await computeStatus(root);
+    const ctx = await resolveProjectContext(context, false, false);
+    const s = await computeStatus(ctx);
+    const project = s.activeProjectName ? `@${s.activeProjectName}` : "@none";
     const v = s.venvOk ? "venv✓" : "venv!";
     const d = s.dockerOk ? "docker✓" : "docker!";
-    statusBar.text = `Pwrforge: ${v} ${d}`;
+    statusBar.text = `Pwrforge ${project}: ${v} ${d}`;
     if (!s.dockerOk && s.dockerHint) {
       statusBar.tooltip = s.dockerHint;
+    } else {
+      statusBar.tooltip = s.activeProjectName
+        ? `Active project: ${s.activeProjectName}`
+        : "Use 'Pwrforge: Select Active Project'";
     }
   }
 
@@ -453,13 +554,23 @@ export function activate(context: vscode.ExtensionContext) {
       await updateStatusBar();
     }),
 
-    vscode.commands.registerCommand("pwrforge.setup", async () => {
-      const root = workspaceRoot();
-      if (!root) {
+    vscode.commands.registerCommand("pwrforge.selectProject", async () => {
+      const ctx = await getCtx(true);
+      if (!ctx) {
         return;
       }
-      await ensureVenv(root);
-      const dockerOk = await ensureDocker(root);
+      vscode.window.showInformationMessage(`Pwrforge: active project set to ${projectName(ctx.projectRoot)}.`);
+      provider.refresh();
+      await updateStatusBar();
+    }),
+
+    vscode.commands.registerCommand("pwrforge.setup", async () => {
+      const ctx = await getCtx(true);
+      if (!ctx) {
+        return;
+      }
+      await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot, ctx.workspaceRoot);
+      const dockerOk = await ensureDocker(ctx.projectRoot);
       if (dockerOk) {
         vscode.window.showInformationMessage("Pwrforge: setup OK (.venv + docker).");
       } else {
@@ -470,11 +581,11 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand("pwrforge.dockerDoctor", async () => {
-      const root = workspaceRoot();
-      if (!root) {
+      const ctx = await getCtx(true);
+      if (!ctx) {
         return;
       }
-      const d = await dockerDoctor(root);
+      const d = await dockerDoctor(ctx.projectRoot);
       if (d.ok) {
         vscode.window.showInformationMessage("Pwrforge: Docker OK.");
       } else {
@@ -488,42 +599,123 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand("pwrforge.build", async () => {
-      await runPwrforge("build");
+      const ctx = await getCtx(true);
+      if (!ctx) {
+        return;
+      }
+      await runPwrforge(ctx, "build");
       provider.refresh();
       await updateStatusBar();
     }),
 
     vscode.commands.registerCommand("pwrforge.test", async () => {
-      await runPwrforge("test");
+      const ctx = await getCtx(true);
+      if (!ctx) {
+        return;
+      }
+      await runPwrforge(ctx, "test");
       provider.refresh();
       await updateStatusBar();
     }),
 
     vscode.commands.registerCommand("pwrforge.check", async () => {
-      await runPwrforge("check");
+      const ctx = await getCtx(true);
+      if (!ctx) {
+        return;
+      }
+      await runPwrforge(ctx, "check");
       provider.refresh();
       await updateStatusBar();
     }),
 
     vscode.commands.registerCommand("pwrforge.fix", async () => {
-      await runPwrforge("fix");
+      const ctx = await getCtx(true);
+      if (!ctx) {
+        return;
+      }
+      await runPwrforge(ctx, "fix");
       provider.refresh();
       await updateStatusBar();
     }),
 
-    vscode.commands.registerCommand("pwrforge.clean", async () => runPwrforge("clean")),
-    vscode.commands.registerCommand("pwrforge.run", async () => runPwrforge("run")),
-    vscode.commands.registerCommand("pwrforge.debug", async () => runPwrforge("debug")),
-    vscode.commands.registerCommand("pwrforge.doc", async () => runPwrforge("doc")),
-    vscode.commands.registerCommand("pwrforge.flash", async () => runPwrforge("flash")),
-    vscode.commands.registerCommand("pwrforge.monitor", async () => runPwrforge("monitor")),
-    vscode.commands.registerCommand("pwrforge.update", async () => runPwrforge("update")),
-    vscode.commands.registerCommand("pwrforge.gen", async () => runPwrforge("gen")),
-    vscode.commands.registerCommand("pwrforge.docker", async () => runPwrforge("docker")),
-    vscode.commands.registerCommand("pwrforge.publish", async () => runPwrforge("publish")),
-    vscode.commands.registerCommand("pwrforge.licenseCheck", async () => runPwrforge("license-check")),
-    vscode.commands.registerCommand("pwrforge.new", async () => runPwrforgeNew()),
-    vscode.commands.registerCommand("pwrforge.version", async () => runPwrforge("version")),
+    vscode.commands.registerCommand("pwrforge.clean", async () => {
+      const ctx = await getCtx(true);
+      if (ctx) {
+        await runPwrforge(ctx, "clean");
+      }
+    }),
+    vscode.commands.registerCommand("pwrforge.run", async () => {
+      const ctx = await getCtx(true);
+      if (ctx) {
+        await runPwrforge(ctx, "run");
+      }
+    }),
+    vscode.commands.registerCommand("pwrforge.debug", async () => {
+      const ctx = await getCtx(true);
+      if (ctx) {
+        await runPwrforge(ctx, "debug");
+      }
+    }),
+    vscode.commands.registerCommand("pwrforge.doc", async () => {
+      const ctx = await getCtx(true);
+      if (ctx) {
+        await runPwrforge(ctx, "doc");
+      }
+    }),
+    vscode.commands.registerCommand("pwrforge.flash", async () => {
+      const ctx = await getCtx(true);
+      if (ctx) {
+        await runPwrforge(ctx, "flash");
+      }
+    }),
+    vscode.commands.registerCommand("pwrforge.monitor", async () => {
+      const ctx = await getCtx(true);
+      if (ctx) {
+        await runPwrforge(ctx, "monitor");
+      }
+    }),
+    vscode.commands.registerCommand("pwrforge.update", async () => {
+      const ctx = await getCtx(true);
+      if (ctx) {
+        await runPwrforge(ctx, "update");
+      }
+    }),
+    vscode.commands.registerCommand("pwrforge.gen", async () => {
+      const ctx = await getCtx(true);
+      if (ctx) {
+        await runPwrforge(ctx, "gen");
+      }
+    }),
+    vscode.commands.registerCommand("pwrforge.docker", async () => {
+      const ctx = await getCtx(true);
+      if (ctx) {
+        await runPwrforge(ctx, "docker");
+      }
+    }),
+    vscode.commands.registerCommand("pwrforge.publish", async () => {
+      const ctx = await getCtx(true);
+      if (ctx) {
+        await runPwrforge(ctx, "publish");
+      }
+    }),
+    vscode.commands.registerCommand("pwrforge.licenseCheck", async () => {
+      const ctx = await getCtx(true);
+      if (ctx) {
+        await runPwrforge(ctx, "license-check");
+      }
+    }),
+    vscode.commands.registerCommand("pwrforge.new", async () => {
+      const ctx = await getCtx(true);
+      if (ctx) {
+        await runPwrforgeNew(ctx);
+      }
+    }),
+    vscode.commands.registerCommand("pwrforge.version", async () => {
+      const ctx = await getCtx(true);
+      if (ctx) {
+        await runPwrforge(ctx, "version");
+      }
+    }),
 
     vscode.commands.registerCommand("pwrforge.more", async () => {
       const pick = await vscode.window.showQuickPick(
@@ -551,10 +743,14 @@ export function activate(context: vscode.ExtensionContext) {
       if (!pick) {
         return;
       }
+      const ctx = await getCtx(true);
+      if (!ctx) {
+        return;
+      }
       if (pick.label === "new") {
-        await runPwrforgeNew();
+        await runPwrforgeNew(ctx);
       } else {
-        await runPwrforge(pick.label);
+        await runPwrforge(ctx, pick.label);
       }
       provider.refresh();
       await updateStatusBar();
