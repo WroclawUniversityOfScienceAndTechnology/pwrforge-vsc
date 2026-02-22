@@ -565,7 +565,7 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand("pwrforge.setup", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (!ctx) {
         return;
       }
@@ -581,7 +581,7 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand("pwrforge.dockerDoctor", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (!ctx) {
         return;
       }
@@ -599,7 +599,7 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand("pwrforge.build", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (!ctx) {
         return;
       }
@@ -609,7 +609,7 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand("pwrforge.test", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (!ctx) {
         return;
       }
@@ -619,7 +619,7 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand("pwrforge.check", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (!ctx) {
         return;
       }
@@ -629,7 +629,7 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand("pwrforge.fix", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (!ctx) {
         return;
       }
@@ -639,79 +639,79 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand("pwrforge.clean", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (ctx) {
         await runPwrforge(ctx, "clean");
       }
     }),
     vscode.commands.registerCommand("pwrforge.run", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (ctx) {
         await runPwrforge(ctx, "run");
       }
     }),
     vscode.commands.registerCommand("pwrforge.debug", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (ctx) {
         await runPwrforge(ctx, "debug");
       }
     }),
     vscode.commands.registerCommand("pwrforge.doc", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (ctx) {
         await runPwrforge(ctx, "doc");
       }
     }),
     vscode.commands.registerCommand("pwrforge.flash", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (ctx) {
         await runPwrforge(ctx, "flash");
       }
     }),
     vscode.commands.registerCommand("pwrforge.monitor", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (ctx) {
         await runPwrforge(ctx, "monitor");
       }
     }),
     vscode.commands.registerCommand("pwrforge.update", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (ctx) {
         await runPwrforge(ctx, "update");
       }
     }),
     vscode.commands.registerCommand("pwrforge.gen", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (ctx) {
         await runPwrforge(ctx, "gen");
       }
     }),
     vscode.commands.registerCommand("pwrforge.docker", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (ctx) {
         await runPwrforge(ctx, "docker");
       }
     }),
     vscode.commands.registerCommand("pwrforge.publish", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (ctx) {
         await runPwrforge(ctx, "publish");
       }
     }),
     vscode.commands.registerCommand("pwrforge.licenseCheck", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (ctx) {
         await runPwrforge(ctx, "license-check");
       }
     }),
     vscode.commands.registerCommand("pwrforge.new", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (ctx) {
         await runPwrforgeNew(ctx);
       }
     }),
     vscode.commands.registerCommand("pwrforge.version", async () => {
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (ctx) {
         await runPwrforge(ctx, "version");
       }
@@ -743,7 +743,7 @@ export function activate(context: vscode.ExtensionContext) {
       if (!pick) {
         return;
       }
-      const ctx = await getCtx(true);
+      const ctx = await getCtx();
       if (!ctx) {
         return;
       }
