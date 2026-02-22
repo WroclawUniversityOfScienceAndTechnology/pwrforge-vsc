@@ -387,6 +387,179 @@ async function runPwrforgeNew(ctx: ProjectContext) {
   runInTerminal(pwrforgeCmd(ctx.sharedEnvRoot, "new", args), ctx.projectRoot);
 }
 
+async function runPwrforgeMonitor(ctx: ProjectContext) {
+  await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot, ctx.workspaceRoot);
+  if (!(await ensureProjectInitialized(ctx, "monitor"))) {
+    return;
+  }
+
+  const port = await vscode.window.showInputBox({
+    title: "Pwrforge: Monitor",
+    prompt: "Serial port (required), e.g. /dev/ttyUSB0",
+    placeHolder: "/dev/ttyUSB0",
+    validateInput: (value) => (value.trim().length === 0 ? "Port is required." : undefined)
+  });
+  if (!port) {
+    return;
+  }
+
+  const baudrate = await vscode.window.showInputBox({
+    title: "Pwrforge: Monitor",
+    prompt: "Baudrate (optional, default 115200)",
+    placeHolder: "115200",
+    validateInput: (value) => {
+      if (!value.trim()) {
+        return undefined;
+      }
+      return /^\d+$/.test(value.trim()) ? undefined : "Baudrate must be an integer.";
+    }
+  });
+  if (baudrate === undefined) {
+    return;
+  }
+
+  const args = ["--port", port.trim(), "--base-dir", ctx.projectRoot];
+  if (baudrate.trim()) {
+    args.push("--baudrate", baudrate.trim());
+  }
+
+  runInTerminal(pwrforgeCmd(ctx.sharedEnvRoot, "monitor", args), ctx.projectRoot);
+}
+
+async function runPwrforgeGen(ctx: ProjectContext) {
+  await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot, ctx.workspaceRoot);
+  if (!(await ensureProjectInitialized(ctx, "gen"))) {
+    return;
+  }
+
+  const mode = await vscode.window.showQuickPick(
+    [
+      { label: "No extra flags", value: "none" },
+      { label: "Profile", value: "profile" },
+      { label: "Unit test", value: "unit-test" },
+      { label: "Mock", value: "mock" },
+      { label: "Certificates", value: "certs" },
+      { label: "Filesystem (--fs)", value: "fs" },
+      { label: "Single binary (--bin)", value: "bin" }
+    ],
+    { title: "Pwrforge: Gen", placeHolder: "Choose generation mode" }
+  );
+  if (!mode) {
+    return;
+  }
+
+  const args: string[] = ["--base-dir", ctx.projectRoot];
+
+  if (mode.value === "profile") {
+    const profile = await vscode.window.showInputBox({
+      title: "Pwrforge: Gen",
+      prompt: "Build profile",
+      value: "Debug"
+    });
+    if (profile === undefined) {
+      return;
+    }
+    if (profile.trim()) {
+      args.push("--profile", profile.trim());
+    }
+  } else if (mode.value === "unit-test") {
+    const unitPath = await vscode.window.showInputBox({
+      title: "Pwrforge: Gen",
+      prompt: "Path for --unit-test (file or directory)",
+      placeHolder: "tests/ or include/foo.hpp",
+      validateInput: (value) => (value.trim() ? undefined : "Path is required.")
+    });
+    if (!unitPath) {
+      return;
+    }
+    args.push("--unit-test", unitPath.trim());
+  } else if (mode.value === "mock") {
+    const mockFile = await vscode.window.showInputBox({
+      title: "Pwrforge: Gen",
+      prompt: "File for --mock",
+      placeHolder: "include/foo.hpp",
+      validateInput: (value) => (value.trim() ? undefined : "File is required.")
+    });
+    if (!mockFile) {
+      return;
+    }
+    args.push("--mock", mockFile.trim());
+  } else if (mode.value === "certs") {
+    const deviceId = await vscode.window.showInputBox({
+      title: "Pwrforge: Gen",
+      prompt: "Device ID for --certs",
+      validateInput: (value) => (value.trim() ? undefined : "Device ID is required.")
+    });
+    if (!deviceId) {
+      return;
+    }
+    args.push("--certs", deviceId.trim());
+
+    const certType = await vscode.window.showQuickPick(
+      [
+        { label: "all", value: "all" },
+        { label: "device", value: "device" },
+        { label: "Skip", value: "" }
+      ],
+      { title: "Pwrforge: Gen", placeHolder: "Type for --type (optional)" }
+    );
+    if (!certType) {
+      return;
+    }
+    if (certType.value) {
+      args.push("--type", certType.value);
+    }
+
+    const inputDir = await vscode.window.showInputBox({
+      title: "Pwrforge: Gen",
+      prompt: "Directory for --in (optional)",
+      placeHolder: "certs/"
+    });
+    if (inputDir === undefined) {
+      return;
+    }
+    if (inputDir.trim()) {
+      args.push("--in", inputDir.trim());
+    }
+
+    const password = await vscode.window.showInputBox({
+      title: "Pwrforge: Gen",
+      prompt: "Password for --passwd (optional)",
+      password: true
+    });
+    if (password === undefined) {
+      return;
+    }
+    if (password.trim()) {
+      args.push("--passwd", password.trim());
+    }
+  } else if (mode.value === "fs") {
+    args.push("--fs");
+  } else if (mode.value === "bin") {
+    args.push("--bin");
+  }
+
+  runInTerminal(pwrforgeCmd(ctx.sharedEnvRoot, "gen", args), ctx.projectRoot);
+}
+
+async function runPwrforgeDocker(ctx: ProjectContext) {
+  await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot, ctx.workspaceRoot);
+
+  const subcommand = await vscode.window.showQuickPick(
+    [
+      { label: "build", description: "Build docker layers" },
+      { label: "exec", description: "Attach to existing docker environment" },
+      { label: "run", description: "Run project in docker environment" }
+    ],
+    { title: "Pwrforge: Docker", placeHolder: "Choose docker command" }
+  );
+  if (!subcommand) {
+    return;
+  }
+
+  runInTerminal(pwrforgeCmd(ctx.sharedEnvRoot, "docker", [subcommand.label]), ctx.projectRoot);
+}
+
 async function computeStatus(ctx: ProjectContext | undefined): Promise<Status> {
   if (!ctx) {
     return {
@@ -671,7 +844,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("pwrforge.monitor", async () => {
       const ctx = await getCtx();
       if (ctx) {
-        await runPwrforge(ctx, "monitor");
+        await runPwrforgeMonitor(ctx);
       }
     }),
     vscode.commands.registerCommand("pwrforge.update", async () => {
@@ -683,13 +856,13 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("pwrforge.gen", async () => {
       const ctx = await getCtx();
       if (ctx) {
-        await runPwrforge(ctx, "gen");
+        await runPwrforgeGen(ctx);
       }
     }),
     vscode.commands.registerCommand("pwrforge.docker", async () => {
       const ctx = await getCtx();
       if (ctx) {
-        await runPwrforge(ctx, "docker");
+        await runPwrforgeDocker(ctx);
       }
     }),
     vscode.commands.registerCommand("pwrforge.publish", async () => {
@@ -749,6 +922,12 @@ export function activate(context: vscode.ExtensionContext) {
       }
       if (pick.label === "new") {
         await runPwrforgeNew(ctx);
+      } else if (pick.label === "monitor") {
+        await runPwrforgeMonitor(ctx);
+      } else if (pick.label === "gen") {
+        await runPwrforgeGen(ctx);
+      } else if (pick.label === "docker") {
+        await runPwrforgeDocker(ctx);
       } else {
         await runPwrforge(ctx, pick.label);
       }
