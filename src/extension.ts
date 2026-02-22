@@ -19,6 +19,11 @@ function venvPython(root: string): string {
   return isWin ? path.join(root, ".venv", "Scripts", "python.exe") : path.join(root, ".venv", "bin", "python");
 }
 
+function venvPwrforge(root: string): string {
+  const isWin = process.platform === "win32";
+  return isWin ? path.join(root, ".venv", "Scripts", "pwrforge.exe") : path.join(root, ".venv", "bin", "pwrforge");
+}
+
 function exists(p: string): boolean {
   try {
     fs.accessSync(p, fs.constants.F_OK);
@@ -38,10 +43,41 @@ async function execCheck(cmd: string, cwd: string): Promise<{ ok: boolean; outpu
   });
 }
 
-function runInTerminal(name: string, cmd: string, cwd: string) {
-  const term = vscode.window.createTerminal({ name, cwd });
+let pwrforgeTerminal: vscode.Terminal | undefined;
+
+function terminalOptions(cwd: string): vscode.TerminalOptions {
+  if (process.platform === "win32") {
+    return { name: "Pwrforge", cwd };
+  }
+
+  // Avoid loading user shell profiles in extension terminals.
+  // This prevents unrelated startup errors from polluting command output.
+  return {
+    name: "Pwrforge",
+    cwd,
+    shellPath: "/bin/bash",
+    shellArgs: ["--noprofile", "--norc"]
+  };
+}
+
+function getPwrforgeTerminal(cwd: string): vscode.Terminal {
+  if (!pwrforgeTerminal) {
+    pwrforgeTerminal = vscode.window.createTerminal(terminalOptions(cwd));
+  }
+  return pwrforgeTerminal;
+}
+
+function quoteArg(arg: string): string {
+  if (process.platform === "win32") {
+    return `"${arg.replace(/"/g, '\\"')}"`;
+  }
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+
+function runInTerminal(cmd: string, cwd: string) {
+  const term = getPwrforgeTerminal(cwd);
   term.show(true);
-  term.sendText(cmd);
+  term.sendText(cmd, true);
 }
 
 function isPwrforgeRepo(root: string): boolean {
@@ -51,30 +87,34 @@ function isPwrforgeRepo(root: string): boolean {
 
 async function ensureVenv(root: string) {
   const py = venvPython(root);
-  if (exists(py)) {
-    return;
+  const cli = venvPwrforge(root);
+
+  if (!exists(py)) {
+    const py312 = await execCheck("python3.12 --version", root);
+    if (!py312.ok) {
+      vscode.window.showErrorMessage("Pwrforge: nie widzę python3.12 w PATH. Zainstaluj Python 3.12 (z venv).");
+      throw new Error("python3.12 missing");
+    }
+
+    const venv = await execCheck("python3.12 -m venv .venv", root);
+    if (!venv.ok) {
+      vscode.window.showErrorMessage("Pwrforge: nie udało się utworzyć .venv:\n" + venv.output);
+      throw new Error("venv create failed");
+    }
+
+    await execCheck(`${quoteArg(py)} -m pip install --upgrade pip`, root);
   }
 
-  const py312 = await execCheck("python3.12 --version", root);
-  if (!py312.ok) {
-    vscode.window.showErrorMessage("Pwrforge: nie widzę python3.12 w PATH. Zainstaluj Python 3.12 (z venv).");
-    throw new Error("python3.12 missing");
-  }
-
-  const venv = await execCheck("python3.12 -m venv .venv", root);
-  if (!venv.ok) {
-    vscode.window.showErrorMessage("Pwrforge: nie udało się utworzyć .venv:\n" + venv.output);
-    throw new Error("venv create failed");
-  }
-
-  await execCheck(`${py} -m pip install --upgrade pip`, root);
-
-  // Jeśli użytkownik jest w repo pwrforge -> install editable, w innym wypadku PyPI
-  const installCmd = isPwrforgeRepo(root) ? `${py} -m pip install -e .` : `${py} -m pip install pwrforge`;
-  const install = await execCheck(installCmd, root);
-  if (!install.ok) {
-    vscode.window.showErrorMessage("Pwrforge: nie udało się zainstalować pwrforge do .venv:\n" + install.output);
-    throw new Error("pwrforge install failed");
+  if (!exists(cli)) {
+    // Jeśli użytkownik jest w repo pwrforge -> install editable, w innym wypadku PyPI
+    const installCmd = isPwrforgeRepo(root)
+      ? `${quoteArg(py)} -m pip install -e .`
+      : `${quoteArg(py)} -m pip install pwrforge`;
+    const install = await execCheck(installCmd, root);
+    if (!install.ok) {
+      vscode.window.showErrorMessage("Pwrforge: nie udało się zainstalować pwrforge do .venv:\n" + install.output);
+      throw new Error("pwrforge install failed");
+    }
   }
 
   // ustaw interpreter VS Code (fallback)
@@ -119,19 +159,101 @@ async function dockerDoctor(root: string): Promise<{ ok: boolean; hint?: string;
   return { ok: false, hint: "Docker niedostępny lub błąd. Sprawdź docker version/info.", raw: r.output };
 }
 
-function pwrforgeCmd(root: string, subcmd: string, args: string[] = []): string {
-  const py = venvPython(root);
-  const parts = ["-m", "pwrforge", subcmd, ...args].join(" ");
-  return `${py} ${parts}`;
+async function detectDockerInstallCommand(root: string): Promise<string | undefined> {
+  if (process.platform === "win32") {
+    return "winget install -e --id Docker.DockerDesktop";
+  }
+  if (process.platform === "darwin") {
+    return "brew install --cask docker";
+  }
+
+  // Linux best-effort per distro family.
+  if ((await execCheck("command -v apt-get", root)).ok) {
+    return "sudo apt-get update && sudo apt-get install -y docker.io docker-compose-plugin && sudo systemctl enable --now docker";
+  }
+  if ((await execCheck("command -v dnf", root)).ok) {
+    return "sudo dnf install -y docker docker-compose-plugin && sudo systemctl enable --now docker";
+  }
+  if ((await execCheck("command -v pacman", root)).ok) {
+    return "sudo pacman -Sy --noconfirm docker docker-compose && sudo systemctl enable --now docker";
+  }
+  return undefined;
 }
 
-async function runPwrforge(subcmd: string, args: string[] = []) {
+async function ensureDocker(root: string): Promise<boolean> {
+  const d = await dockerDoctor(root);
+  if (d.ok) {
+    return true;
+  }
+
+  const pick = await vscode.window.showWarningMessage(
+    `Pwrforge: ${d.hint ?? "Docker not available."} Install Docker now?`,
+    { modal: true },
+    "Install Docker",
+    "Skip"
+  );
+
+  if (pick !== "Install Docker") {
+    return false;
+  }
+
+  const installCmd = await detectDockerInstallCommand(root);
+  if (!installCmd) {
+    vscode.window.showErrorMessage(
+      "Pwrforge: I cannot determine an automatic Docker install command for this OS. Please install Docker manually."
+    );
+    return false;
+  }
+
+  runInTerminal(installCmd, root);
+  vscode.window.showInformationMessage(
+    "Pwrforge: Docker install command started in terminal. Complete it, then run 'Pwrforge: Docker doctor'."
+  );
+  return false;
+}
+
+function pwrforgeCmd(root: string, subcmd: string, args: string[] = []): string {
+  const cli = venvPwrforge(root);
+  const parts = [subcmd, ...args].map(quoteArg).join(" ");
+  return `${quoteArg(cli)} ${parts}`;
+}
+
+function needsLockFile(subcmd: string): boolean {
+  return !["new", "version", "docker", "update"].includes(subcmd);
+}
+
+async function ensureProjectInitialized(root: string, subcmd: string): Promise<boolean> {
+  if (!needsLockFile(subcmd)) {
+    return true;
+  }
+  const lockPath = path.join(root, "pwrforge.lock");
+  if (exists(lockPath)) {
+    return true;
+  }
+
+  const action = await vscode.window.showWarningMessage(
+    "Pwrforge: `pwrforge.lock` not found. Run `pwrforge update` first?",
+    "Run Update",
+    "Cancel"
+  );
+  if (action !== "Run Update") {
+    return false;
+  }
+
+  runInTerminal(pwrforgeCmd(root, "update"), root);
+  return false;
+}
+
+async function runPwrforge(subcmd: string, args: string[] = []): Promise<boolean> {
   const root = workspaceRoot();
   if (!root) {
-    return;
+    return false;
   }
 
   await ensureVenv(root);
+  if (!(await ensureProjectInitialized(root, subcmd))) {
+    return false;
+  }
 
   // Nie blokuj zawsze — ale pokaż ostrzeżenie. Część komend może działać bez dockera, część nie.
   const d = await dockerDoctor(root);
@@ -139,7 +261,59 @@ async function runPwrforge(subcmd: string, args: string[] = []) {
     vscode.window.showWarningMessage("Pwrforge: " + d.hint);
   }
 
-  runInTerminal(`pwrforge ${subcmd}`, pwrforgeCmd(root, subcmd, args), root);
+  runInTerminal(pwrforgeCmd(root, subcmd, args), root);
+  return true;
+}
+
+async function runPwrforgeNew() {
+  const root = workspaceRoot();
+  if (!root) {
+    return;
+  }
+  await ensureVenv(root);
+
+  const projectName = await vscode.window.showInputBox({
+    title: "Pwrforge: New Project",
+    prompt: "Project name (required)",
+    placeHolder: "my_project",
+    validateInput: (value) => (value.trim().length === 0 ? "PROJECT_NAME is required." : undefined)
+  });
+  if (!projectName) {
+    return;
+  }
+
+  const includeDocker = await vscode.window.showQuickPick(
+    [
+      { label: "Docker enabled", value: "--docker" },
+      { label: "No Docker", value: "--no-docker" }
+    ],
+    { title: "Pwrforge: New Project", placeHolder: "Docker setup" }
+  );
+  if (!includeDocker) {
+    return;
+  }
+
+  const target = await vscode.window.showQuickPick(
+    [
+      { label: "x86", value: "x86" },
+      { label: "stm32", value: "stm32" },
+      { label: "esp32", value: "esp32" },
+      { label: "atsam", value: "atsam" },
+      { label: "Skip target", value: "" }
+    ],
+    { title: "Pwrforge: New Project", placeHolder: "Target (optional)" }
+  );
+  if (!target) {
+    return;
+  }
+
+  const args = [includeDocker.value];
+  if (target.value) {
+    args.push("--target", target.value);
+  }
+  args.push(projectName.trim());
+
+  runInTerminal(pwrforgeCmd(root, "new", args), root);
 }
 
 async function computeStatus(root: string): Promise<Status> {
@@ -239,6 +413,14 @@ class PwrforgeViewProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
 }
 
 export function activate(context: vscode.ExtensionContext) {
+  context.subscriptions.push(
+    vscode.window.onDidCloseTerminal((terminal) => {
+      if (terminal === pwrforgeTerminal) {
+        pwrforgeTerminal = undefined;
+      }
+    })
+  );
+
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBar.text = "Pwrforge: idle";
   statusBar.command = "pwrforge.more";
@@ -275,11 +457,12 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
       await ensureVenv(root);
-      const d = await dockerDoctor(root);
-      if (!d.ok && d.hint) {
-        vscode.window.showWarningMessage("Pwrforge: " + d.hint);
+      const dockerOk = await ensureDocker(root);
+      if (dockerOk) {
+        vscode.window.showInformationMessage("Pwrforge: setup OK (.venv + docker).");
+      } else {
+        vscode.window.showWarningMessage("Pwrforge: .venv ready. Docker still needs attention.");
       }
-      vscode.window.showInformationMessage("Pwrforge: setup OK.");
       provider.refresh();
       await updateStatusBar();
     }),
@@ -337,7 +520,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("pwrforge.docker", async () => runPwrforge("docker")),
     vscode.commands.registerCommand("pwrforge.publish", async () => runPwrforge("publish")),
     vscode.commands.registerCommand("pwrforge.licenseCheck", async () => runPwrforge("license-check")),
-    vscode.commands.registerCommand("pwrforge.new", async () => runPwrforge("new")),
+    vscode.commands.registerCommand("pwrforge.new", async () => runPwrforgeNew()),
     vscode.commands.registerCommand("pwrforge.version", async () => runPwrforge("version")),
 
     vscode.commands.registerCommand("pwrforge.more", async () => {
@@ -366,7 +549,11 @@ export function activate(context: vscode.ExtensionContext) {
       if (!pick) {
         return;
       }
-      await runPwrforge(pick.label);
+      if (pick.label === "new") {
+        await runPwrforgeNew();
+      } else {
+        await runPwrforge(pick.label);
+      }
       provider.refresh();
       await updateStatusBar();
     })

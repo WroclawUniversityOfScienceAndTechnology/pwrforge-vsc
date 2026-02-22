@@ -48,7 +48,8 @@
     "commands": [
       {
         "command": "pwrforge.setup",
-        "title": "Pwrforge: Setup (.venv + docker checks)"
+        "title": "Setup Environment",
+        "category": "Pwrforge"
       },
       {
         "command": "pwrforge.build",
