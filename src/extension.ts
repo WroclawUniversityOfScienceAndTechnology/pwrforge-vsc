@@ -55,11 +55,27 @@ function exists(p: string): boolean {
 }
 
 async function execCheck(cmd: string, cwd: string): Promise<{ ok: boolean; output: string; code: number | null }> {
+  return execCheckWithOutput(cmd, cwd);
+}
+
+async function execCheckWithOutput(
+  cmd: string,
+  cwd: string,
+  onData?: (chunk: string) => void
+): Promise<{ ok: boolean; output: string; code: number | null }> {
   return new Promise((resolve) => {
     const p = spawn(cmd, { cwd, shell: true });
     let out = "";
-    p.stdout.on("data", (d) => (out += d.toString()));
-    p.stderr.on("data", (d) => (out += d.toString()));
+    p.stdout.on("data", (d) => {
+      const chunk = d.toString();
+      out += chunk;
+      onData?.(chunk);
+    });
+    p.stderr.on("data", (d) => {
+      const chunk = d.toString();
+      out += chunk;
+      onData?.(chunk);
+    });
     p.on("close", (code) => resolve({ ok: code === 0, output: out, code }));
   });
 }
@@ -184,39 +200,42 @@ async function resolveProjectContext(
   };
 }
 
-async function ensureVenv(sharedEnvRoot: string, projectRoot: string, workspaceRootForEditableInstall?: string) {
+type EnsureVenvOptions = {
+  installLatestPwrforge?: boolean;
+  output?: vscode.OutputChannel;
+  progress?: vscode.Progress<{ message?: string; increment?: number }>;
+};
+
+async function ensureVenv(sharedEnvRoot: string, projectRoot: string, options: EnsureVenvOptions = {}) {
+  const { installLatestPwrforge = false, output, progress } = options;
   const py = venvPython(sharedEnvRoot);
   const cli = venvPwrforge(sharedEnvRoot);
 
+  const runStep = async (label: string, cmd: string, cwd: string) => {
+    output?.appendLine(`\n[${label}]`);
+    output?.appendLine(`$ ${cmd}`);
+    progress?.report({ message: label });
+    const result = await execCheckWithOutput(cmd, cwd, (chunk) => output?.append(chunk));
+    if (!result.ok) {
+      throw new Error(`${label} failed:\n${result.output}`);
+    }
+  };
+
   if (!exists(py)) {
+    output?.appendLine("Creating Python virtual environment (.venv)...");
     const py312 = await execCheck("python3.12 --version", projectRoot);
     if (!py312.ok) {
       vscode.window.showErrorMessage("Pwrforge: nie widzę python3.12 w PATH. Zainstaluj Python 3.12 (z venv).");
       throw new Error("python3.12 missing");
     }
 
-    const venv = await execCheck("python3.12 -m venv .venv", sharedEnvRoot);
-    if (!venv.ok) {
-      vscode.window.showErrorMessage("Pwrforge: nie udało się utworzyć .venv:\n" + venv.output);
-      throw new Error("venv create failed");
-    }
-
-    await execCheck(`${quoteArg(py)} -m pip install --upgrade pip`, sharedEnvRoot);
+    await runStep("Create .venv", "python3.12 -m venv .venv", sharedEnvRoot);
+    await runStep("Upgrade pip", `${quoteArg(py)} -m pip install --upgrade pip`, sharedEnvRoot);
   }
 
-  if (!exists(cli)) {
-    // Jeśli użytkownik jest w repo pwrforge -> install editable, w innym wypadku PyPI
-    const installCmd = workspaceRootForEditableInstall && isPwrforgeRepo(workspaceRootForEditableInstall)
-      ? `${quoteArg(py)} -m pip install -e .`
-      : `${quoteArg(py)} -m pip install pwrforge`;
-    const installCwd = workspaceRootForEditableInstall && isPwrforgeRepo(workspaceRootForEditableInstall)
-      ? workspaceRootForEditableInstall
-      : sharedEnvRoot;
-    const install = await execCheck(installCmd, installCwd);
-    if (!install.ok) {
-      vscode.window.showErrorMessage("Pwrforge: nie udało się zainstalować pwrforge do .venv:\n" + install.output);
-      throw new Error("pwrforge install failed");
-    }
+  if (!exists(cli) || installLatestPwrforge) {
+    output?.appendLine("Installing latest pwrforge into .venv...");
+    await runStep("Install latest pwrforge", `${quoteArg(py)} -m pip install --upgrade pwrforge`, sharedEnvRoot);
   }
 
   // ustaw interpreter VS Code (fallback)
@@ -347,7 +366,7 @@ async function ensureProjectInitialized(ctx: ProjectContext, subcmd: string): Pr
 }
 
 async function runPwrforge(ctx: ProjectContext, subcmd: string, args: string[] = []): Promise<boolean> {
-  await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot, ctx.workspaceRoot);
+  await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot);
   if (!(await ensureProjectInitialized(ctx, subcmd))) {
     return false;
   }
@@ -363,7 +382,7 @@ async function runPwrforge(ctx: ProjectContext, subcmd: string, args: string[] =
 }
 
 async function runPwrforgeNew(ctx: ProjectContext) {
-  await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot, ctx.workspaceRoot);
+  await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot);
 
   const projectName = await vscode.window.showInputBox({
     title: "Pwrforge: New Project",
@@ -411,7 +430,7 @@ async function runPwrforgeNew(ctx: ProjectContext) {
 }
 
 async function runPwrforgeMonitor(ctx: ProjectContext) {
-  await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot, ctx.workspaceRoot);
+  await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot);
   if (!(await ensureProjectInitialized(ctx, "monitor"))) {
     return;
   }
@@ -450,7 +469,7 @@ async function runPwrforgeMonitor(ctx: ProjectContext) {
 }
 
 async function runPwrforgeGen(ctx: ProjectContext) {
-  await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot, ctx.workspaceRoot);
+  await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot);
   if (!(await ensureProjectInitialized(ctx, "gen"))) {
     return;
   }
@@ -566,7 +585,7 @@ async function runPwrforgeGen(ctx: ProjectContext) {
 }
 
 async function runPwrforgeDocker(ctx: ProjectContext) {
-  await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot, ctx.workspaceRoot);
+  await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot);
 
   const subcommand = await vscode.window.showQuickPick(
     [
@@ -584,7 +603,7 @@ async function runPwrforgeDocker(ctx: ProjectContext) {
 }
 
 async function runPwrforgeFlash(ctx: ProjectContext) {
-  await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot, ctx.workspaceRoot);
+  await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot);
   if (!(await ensureProjectInitialized(ctx, "flash"))) {
     return;
   }
@@ -824,6 +843,38 @@ export function activate(context: vscode.ExtensionContext) {
 
   const provider = new PwrforgeViewProvider(context);
   vscode.window.registerTreeDataProvider("pwrforge_view", provider);
+  const setupOutput = vscode.window.createOutputChannel("Pwrforge Setup");
+  context.subscriptions.push(setupOutput);
+
+  async function runSetup(ctx: ProjectContext): Promise<boolean> {
+    setupOutput.clear();
+    setupOutput.show(true);
+    setupOutput.appendLine(`Pwrforge setup started at ${new Date().toLocaleString()}`);
+    setupOutput.appendLine(`Workspace: ${ctx.workspaceRoot}`);
+    setupOutput.appendLine(`Project: ${ctx.projectRoot}`);
+    setupOutput.appendLine(`Shared env root: ${ctx.sharedEnvRoot}`);
+
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: "Pwrforge setup",
+        cancellable: false
+      },
+      async (progress) => {
+        progress.report({ message: "Preparing virtual environment..." });
+        await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot, {
+          installLatestPwrforge: true,
+          output: setupOutput,
+          progress
+        });
+      }
+    );
+
+    setupOutput.appendLine("\n[Check Docker]");
+    const dockerOk = await ensureDocker(ctx.projectRoot);
+    setupOutput.appendLine(dockerOk ? "Docker check: OK" : "Docker check: needs attention");
+    return dockerOk;
+  }
 
   async function getCtx(forcePick = false, allowWorkspaceFallback = false): Promise<ProjectContext | undefined> {
     return resolveProjectContext(context, forcePick, true, allowWorkspaceFallback);
@@ -871,8 +922,7 @@ export function activate(context: vscode.ExtensionContext) {
       if (!ctx) {
         return;
       }
-      await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot, ctx.workspaceRoot);
-      const dockerOk = await ensureDocker(ctx.projectRoot);
+      const dockerOk = await runSetup(ctx);
       if (dockerOk) {
         vscode.window.showInformationMessage("Pwrforge: setup OK (.venv + docker).");
       } else {
@@ -1051,8 +1101,7 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
       if (pick.label === "setup") {
-        await ensureVenv(ctx.sharedEnvRoot, ctx.projectRoot, ctx.workspaceRoot);
-        await ensureDocker(ctx.projectRoot);
+        await runSetup(ctx);
       } else if (pick.label === "new") {
         await runPwrforgeNew(ctx);
       } else if (pick.label === "monitor") {
