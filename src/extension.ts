@@ -223,9 +223,8 @@ async function ensureVenv(sharedEnvRoot: string, projectRoot: string, options: E
 
   if (!exists(py)) {
     output?.appendLine("Creating Python virtual environment (.venv)...");
-    const py312 = await execCheck("python3.12 --version", projectRoot);
-    if (!py312.ok) {
-      vscode.window.showErrorMessage("Pwrforge: nie widzę python3.12 w PATH. Zainstaluj Python 3.12 (z venv).");
+    const pythonReady = await ensurePython312(projectRoot, output);
+    if (!pythonReady) {
       throw new Error("python3.12 missing");
     }
 
@@ -299,6 +298,64 @@ async function detectDockerInstallCommand(root: string): Promise<string | undefi
     return "sudo pacman -Sy --noconfirm docker docker-compose && sudo systemctl enable --now docker";
   }
   return undefined;
+}
+
+async function detectPythonInstallCommand(root: string): Promise<string | undefined> {
+  if (process.platform === "win32") {
+    return "winget install -e --id Python.Python.3.12";
+  }
+  if (process.platform === "darwin") {
+    return "brew install python@3.12";
+  }
+
+  // Linux best-effort per distro family.
+  if ((await execCheck("command -v apt-get", root)).ok) {
+    return "sudo apt-get update && sudo apt-get install -y python3.12 python3.12-venv";
+  }
+  if ((await execCheck("command -v dnf", root)).ok) {
+    return "sudo dnf install -y python3.12";
+  }
+  if ((await execCheck("command -v pacman", root)).ok) {
+    return "sudo pacman -Sy --noconfirm python";
+  }
+  return undefined;
+}
+
+async function ensurePython312(root: string, output?: vscode.OutputChannel): Promise<boolean> {
+  const py312 = await execCheck("python3.12 --version", root);
+  if (py312.ok) {
+    output?.appendLine("python3.12 detected.");
+    return true;
+  }
+
+  const pick = await vscode.window.showWarningMessage(
+    "Pwrforge: python3.12 not found in PATH. Install Python now?",
+    { modal: true },
+    "Install Python",
+    "Skip"
+  );
+  if (pick !== "Install Python") {
+    vscode.window.showErrorMessage("Pwrforge: python3.12 is required. Install Python 3.12 and run Setup again.");
+    output?.appendLine("python3.12 missing; user skipped installation.");
+    return false;
+  }
+
+  const installCmd = await detectPythonInstallCommand(root);
+  if (!installCmd) {
+    vscode.window.showErrorMessage(
+      "Pwrforge: I cannot determine an automatic Python install command for this OS. Please install Python 3.12 manually."
+    );
+    output?.appendLine("No automatic Python install command for this OS.");
+    return false;
+  }
+
+  output?.appendLine("\n[Install Python]");
+  output?.appendLine(`$ ${installCmd}`);
+  runInTerminal(installCmd, root);
+  vscode.window.showInformationMessage(
+    "Pwrforge: Python install command started in terminal. Complete it, then run Setup again."
+  );
+  return false;
 }
 
 async function ensureDocker(root: string): Promise<boolean> {

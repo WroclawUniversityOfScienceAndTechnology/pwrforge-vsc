@@ -130,3 +130,4 @@ Useful scripts:
 - `npm run lint`
 - `npm run check-types`
 - `npm test`
+- `vsce publish`
